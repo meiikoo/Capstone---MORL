@@ -21,8 +21,14 @@ class MOHighwayWrapper(gymnasium.Wrapper):
         # info['speed'] is normalized speed (0 to 1).
         # We simply return the speed itself.
         # Fast = 1.0, Stopped = 0.0
-        efficiency_reward = info['speed']
-        
+        current_speed = info['speed']  
+
+        #typical range from 0 to 35 in highway-env
+        min_speed = 0.0
+        max_speed = 35 # average highway-env speed
+
+        efficiency_reward = np.clip((current_speed - min_speed) / (max_speed - min_speed), 0.0, 1.0)
+
         # --- 2. Safety Reward (Collision) ---
         # Simple logic:
         # If crashed: -1
