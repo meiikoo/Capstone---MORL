@@ -13,6 +13,7 @@ class MOHighwayWrapper(gymnasium.Wrapper):
         # Define the reward space: 3 objectives
         # shape=(3,) means we return 3 numbers
         self.reward_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
+        self.unwrapped.reward_space = self.reward_space
         
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
