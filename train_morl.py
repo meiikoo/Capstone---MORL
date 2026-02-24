@@ -8,7 +8,7 @@ os.environ["WANDB_MODE"] = "disabled"
 
 from morl_baselines.multi_policy.pcn.pcn import PCN
 from gymnasium.wrappers import FlattenObservation
-from mo_multi_goal import MOHighwayWrapper, config
+from highway_mo_env import MOHighwayWrapper, config
 
 def train():
     # 1. Create the base environment
