@@ -70,6 +70,7 @@ config = {
     },
     "duration": 40,              # Episode length in seconds
     "vehicles_density": 1.5,     # Traffic density (simpler than 2)
+    "collision_reward": -1,        # Penalty for collisions (we handle this in our wrapper)
 }
 
 if __name__ == "__main__":
