@@ -225,11 +225,45 @@ class MOCarlaWrapper:
     
     def _get_info(self):
         """Get additional info for debugging."""
+        speed = 0.0
+        if self.vehicle is not None:
+            velocity = self.vehicle.get_velocity()
+            speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+
         info = {
+            'speed': speed,
             'crashed': self.crashed,
-            'collision_count': len(self.collision_history)
+            'collision_count': len(self.collision_history),
+            # These get updated with per-step values inside step()
+            'lateral_accel': 0.0,
+            'rollover_risk': 0.0,
+            'min_lidar_distance': 50.0
         }
         return info
+
+    def _calculate_rollover_risk(self):
+        """Estimate rollover risk from lateral acceleration and SSF."""
+        transform = self.vehicle.get_transform()
+        velocity = self.vehicle.get_velocity()
+
+        speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+        current_heading = math.radians(transform.rotation.yaw)
+
+        if self.last_heading is None:
+            yaw_rate = 0.0
+        else:
+            # Wrap heading difference to [-pi, pi] for stable yaw-rate estimation.
+            delta_heading = current_heading - self.last_heading
+            delta_heading = (delta_heading + math.pi) % (2 * math.pi) - math.pi
+            yaw_rate = delta_heading / max(self.delta_seconds, 1e-6)
+
+        lateral_accel = abs(speed * yaw_rate)
+        risk = np.clip(lateral_accel / self.SSF_LIMIT_G, 0.0, 1.0)
+
+        self.last_heading = current_heading
+        self.last_location = transform.location
+
+        return risk, lateral_accel
     
     def _calculate_lidar_safety(self, lidar_obs):
         """Calculate safety reward based on LiDAR data."""
@@ -303,6 +337,10 @@ class MOCarlaWrapper:
         risk, lat_accel = self._calculate_rollover_risk()
         stability_reward = -1.0 * risk
         stability_reward = np.clip(stability_reward, -1.0, 0.0)
+
+        info['lateral_accel'] = float(lat_accel)
+        info['rollover_risk'] = float(risk)
+        info['min_lidar_distance'] = float(min_distance)
         
         # Combine rewards
         vec_reward = np.array([efficiency_reward, safety_reward, stability_reward], 
