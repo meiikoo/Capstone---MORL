@@ -264,19 +264,23 @@ class MOCarlaWrapper:
     
     def _get_info(self):
         """Get additional info for debugging."""
-        speed = 0.0
-        if self.vehicle is not None:
-            velocity = self.vehicle.get_velocity()
-            speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
-
+        velocity = self.vehicle.get_velocity()
+        speed = math.sqrt(velocity.x**2 + velocity.y**2)
+        
+        # Calculate current metrics
+        risk, lat_accel = self._calculate_rollover_risk() if self.vehicle else (0.0, 0.0)
+        
+        _, lidar_obs = self._get_observation()
+        distances = lidar_obs * 50.0
+        min_distance = np.min(distances)
+        
         info = {
-            'speed': speed,
             'crashed': self.crashed,
             'collision_count': len(self.collision_history),
-            # These get updated with per-step values inside step()
-            'lateral_accel': 0.0,
-            'rollover_risk': 0.0,
-            'min_lidar_distance': 50.0
+            'speed': speed,
+            'lateral_accel': lat_accel,
+            'rollover_risk': risk,
+            'min_lidar_distance': min_distance
         }
         return info
 
