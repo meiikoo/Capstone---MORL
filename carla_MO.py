@@ -222,6 +222,45 @@ class MOCarlaWrapper:
             lidar_obs = self.lidar_data.copy()
         
         return (kinematics_obs, lidar_obs)
+
+    def _calculate_rollover_risk(self):
+        """Calculate rollover risk based on lateral acceleration and SSF."""
+        # Get vehicle physics
+        velocity = self.vehicle.get_velocity()
+        speed = math.sqrt(velocity.x**2 + velocity.y**2)
+        
+        #Get current heading
+        transform = self.vehicle.get_transform()
+        current_heading = math.radians(transform.rotation.yaw)
+        current_location = transform.location
+
+        # Calculate heading change and lateral acceleration
+        if self.last_heading is not None and self.last_location is not None:
+            # Calculate heading rate (yaw rate)
+            heading_diff = current_heading - self.last_heading
+            
+            # Normalize angle difference to [-pi, pi]
+            heading_diff = (heading_diff + np.pi) % (2 * np.pi) - np.pi
+            
+            # Yaw rate (rad/s)
+            yaw_rate = heading_diff / self.delta_seconds
+            
+            # Lateral acceleration = speed * yaw_rate
+            lateral_accel = speed * abs(yaw_rate)
+        else:
+            lateral_accel = 0.0
+
+        # Update last heading and location
+        self.last_heading = current_heading
+        self.last_location = current_location
+
+        #Calculate rollover risk based on ssf threshold
+        if lateral_accel >= self.SSF_LIMIT_G:
+            risk = 1.0  # High risk of rollover
+        else:
+            risk = lateral_accel / self.SSF_LIMIT_G  # Normalize to [0, 1]
+
+        return risk, lateral_accel
     
     def _get_info(self):
         """Get additional info for debugging."""
