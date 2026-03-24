@@ -83,9 +83,13 @@ class MOCarlaWrapper:
         # Spawn sensors
         self._spawn_lidar()
         self._spawn_collision_sensor()
+
+        # Position camera to see vehicle
+        self._follow_vehicle_with_spectator()
         
-        # Tick once to initialize sensors
-        self.world.tick()
+         # Warmup ticks
+        for _ in range(10):
+            self.world.tick()
         
         # Get initial observation
         obs = self._get_observation()
@@ -96,12 +100,21 @@ class MOCarlaWrapper:
     def _spawn_vehicle(self):
         """Spawn a vehicle at a random location."""
         #getting vehicle blueprint
-        vehicle_bp = self.blueprint_library.filter('vehicle.*')[0]  # Choose a random vehicle
+        vehicle_bp = self.world.get_blueprint_library().find('vehicle.tesla.model3')  # Choose a tesla ehicle
         #get random spawn point
         spawn_points = self.world.get_map().get_spawn_points()
-        spawn_point = np.random.choice(spawn_points)
-        #spawn vehicle
-        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
+        
+        # spawn_point = np.random.choice(spawn_points)
+        # #spawn vehicle
+        # self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
+        for attempt in range(10):  # Try multiple spawn points
+            spawn_point = np.random.choice(spawn_points)
+            self.vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+            if self.vehicle is not None:
+                print(f"Vehicle spawned successfully at attempt {attempt + 1}")
+                return
+        
+        raise RuntimeError("Failed to spawn vehicle after 10 attempts")
 
     def _spawn_lidar(self):
         """Spawn a LiDAR sensor and attach it to the vehicle."""
@@ -150,8 +163,7 @@ class MOCarlaWrapper:
         
         # Convert raw LiDAR data to numpy array
         points = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4)
-        self.lidar_data = points  # Store the latest LiDAR data
-
+    
         #calculate distances (x,y,z,intensity)
         distances = np.sqrt(points[:, 0]**2 + points[:, 1]**2 + points[:, 2]**2)
 
@@ -261,6 +273,18 @@ class MOCarlaWrapper:
             risk = lateral_accel / self.SSF_LIMIT_G  # Normalize to [0, 1]
 
         return risk, lateral_accel
+
+    def _follow_vehicle_with_spectator(self):
+        """Position spectator camera to follow the vehicle."""
+        if self.vehicle is not None:
+            spectator = self.world.get_spectator()
+            transform = self.vehicle.get_transform()
+            
+            # Position camera behind and above the vehicle
+            spectator.set_transform(carla.Transform(
+                transform.location + carla.Location(x=-10, z=5),  # 10m behind, 5m up
+                carla.Rotation(pitch=-15, yaw=transform.rotation.yaw)  # Look at vehicle
+            ))
     
     def _get_info(self):
         """Get additional info for debugging."""
