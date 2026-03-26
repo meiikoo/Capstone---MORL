@@ -2,7 +2,6 @@ import carla
 import numpy as np
 import math
 import weakref
-import time
 from collections import deque
 
 class MOCarlaWrapper:
@@ -29,31 +28,23 @@ class MOCarlaWrapper:
     MAX_SPEED = 35.0   # m/s (126 km/h, typical highway speed)
 
     def __init__(self, host='localhost', port=2000, town='Town04',
-                 episode_length=400, delta_seconds=0.05, action_repeat=4,
-                 reload_world=True, sync_mode=True):
+                 episode_length=400, delta_seconds=0.05, action_repeat=4):
         #connect to CARLA server
         self.client = carla.Client(host, port)
         self.client.set_timeout(60.0)
 
-        # Load or reuse world.
-        if reload_world:
-            self.world = self.client.load_world(town)
-        else:
-            self.world = self.client.get_world()
-            if town and self.world.get_map().name.split("/")[-1] != town:
-                print(f"Warning: current map is {self.world.get_map().name}, expected {town}")
+        # Load world.
+        self.world = self.client.load_world(town)
 
         # Keep previous world settings so we can restore them on close.
         self._prev_settings = self.world.get_settings()
-        self._owns_world_settings = sync_mode
 
-        # Set synchronous mode only when this wrapper should own simulation stepping.
+        # Set synchronous mode.
         self.delta_seconds = delta_seconds
-        if sync_mode:
-            settings = self.world.get_settings()
-            settings.synchronous_mode = True
-            settings.fixed_delta_seconds = self.delta_seconds
-            self.world.apply_settings(settings)
+        settings = self.world.get_settings()
+        settings.synchronous_mode = True
+        settings.fixed_delta_seconds = self.delta_seconds
+        self.world.apply_settings(settings)
 
         #Episode parameters 
         self.episode_length = episode_length # max number of steps before episode ends
@@ -111,102 +102,6 @@ class MOCarlaWrapper:
         
         return obs, info
 
-    def _find_candidate_vehicle(self, role_names=('hero', 'ego'), allow_any_vehicle=False):
-        """Return a suitable vehicle actor or None."""
-        role_matches = []
-        all_vehicles = list(self.world.get_actors().filter('vehicle.*'))
-
-        for actor in all_vehicles:
-            attrs = actor.attributes if hasattr(actor, "attributes") else {}
-            role = attrs.get('role_name', '')
-            if role in role_names:
-                role_matches.append(actor)
-
-        if role_matches:
-            return role_matches[0]
-        if allow_any_vehicle and all_vehicles:
-            return all_vehicles[0]
-        return None
-
-    def attach_to_existing_vehicle(
-        self,
-        role_names=('hero', 'ego'),
-        wait_seconds=60.0,
-        poll_interval=0.5,
-        allow_any_vehicle=True,
-        spawn_if_missing=False,
-        enable_autopilot_if_spawned=True
-    ):
-        """
-        Attach sensors to an already spawned vehicle controlled elsewhere.
-        Useful with manual_control.py so this wrapper only evaluates rewards.
-        """
-        # Destroy only our own old actors before attaching to external ego.
-        self._destroy_actors()
-        self.current_step = 0
-        self.last_heading = None
-        self.last_location = None
-        self.crashed = False
-        self.collision_history.clear()
-        self.lidar_data = None
-
-        print(
-            f"Waiting up to {wait_seconds:.0f}s for external vehicle "
-            f"(roles: {role_names})..."
-        )
-        t_start = time.time()
-        next_status_log = t_start
-        self.vehicle = None
-        while self.vehicle is None and (time.time() - t_start) <= wait_seconds:
-            self.vehicle = self._find_candidate_vehicle(
-                role_names=role_names,
-                allow_any_vehicle=allow_any_vehicle
-            )
-            if self.vehicle is not None:
-                break
-
-            now = time.time()
-            if now >= next_status_log:
-                print("  ...still waiting for a spawned vehicle client.")
-                next_status_log = now + 2.0
-            time.sleep(max(0.05, poll_interval))
-
-        if self.vehicle is None:
-            if spawn_if_missing:
-                print("No external vehicle found. Spawning one from this script...")
-                self._spawn_vehicle(role_name='ego', enable_autopilot=enable_autopilot_if_spawned)
-                self.owns_vehicle = True
-                print(
-                    f"Spawned local vehicle id={self.vehicle.id}, "
-                    f"role_name={self.vehicle.attributes.get('role_name', 'unknown')}, "
-                    f"autopilot={enable_autopilot_if_spawned}"
-                )
-            else:
-                raise RuntimeError(
-                    "No external vehicle found. Start manual_control.py, spawn/select a vehicle, "
-                    "then run this script (or run this script first and start manual_control.py within the wait window)."
-                )
-        else:
-            self.owns_vehicle = False
-            print(
-                f"Attached to external vehicle id={self.vehicle.id}, "
-                f"role_name={self.vehicle.attributes.get('role_name', 'unknown')}"
-            )
-
-        self._spawn_lidar()
-        self._spawn_collision_sensor()
-        self._follow_vehicle_with_spectator()
-
-        # Warm up sensor callbacks.
-        if self._owns_world_settings:
-            for _ in range(6):
-                self.world.tick()
-        else:
-            for _ in range(6):
-                self.world.wait_for_tick(2.0)
-
-        return self._get_observation(), self._get_info()
-    
     def _spawn_vehicle(self, role_name='ego', enable_autopilot=False):
         """Spawn a vehicle using map spawn points with clear fallbacks."""
         # Get vehicle blueprint.
@@ -516,57 +411,6 @@ class MOCarlaWrapper:
         
         return obs, vec_reward, terminated, truncated, info
 
-    def observe_step(self):
-        """Advance one frame (without controlling) and compute MO rewards."""
-        # If this wrapper spawned the vehicle itself (monitor fallback),
-        # apply a light cruise command so the vehicle does not remain idle.
-        if self.owns_vehicle and self.vehicle is not None:
-            pre_vel = self.vehicle.get_velocity()
-            pre_speed = math.sqrt(pre_vel.x**2 + pre_vel.y**2 + pre_vel.z**2)
-            throttle_cmd = 0.55 if pre_speed < 6.0 else 0.20
-            self.vehicle.apply_control(carla.VehicleControl(
-                throttle=float(throttle_cmd),
-                steer=0.0,
-                brake=0.0,
-                hand_brake=False,
-                reverse=False,
-                manual_gear_shift=False
-            ))
-
-        if self._owns_world_settings:
-            self.world.tick()
-        else:
-            self.world.wait_for_tick(2.0)
-        self.current_step += 1
-
-        obs = self._get_observation()
-        info = self._get_info()
-        _, lidar_obs = obs
-
-        # Efficiency
-        current_speed = info['speed']
-        efficiency_reward = np.clip(
-            (current_speed - self.MIN_SPEED) / (self.MAX_SPEED - self.MIN_SPEED),
-            0.0, 1.0
-        )
-
-        # Safety
-        collision_risk, min_distance = self._calculate_lidar_safety(lidar_obs)
-        safety_reward = -1.0 if self.crashed else (1.0 - collision_risk)
-
-        # Stability
-        risk, lat_accel = self._calculate_rollover_risk()
-        stability_reward = np.clip(-1.0 * risk, -1.0, 0.0)
-
-        info['lateral_accel'] = float(lat_accel)
-        info['rollover_risk'] = float(risk)
-        info['min_lidar_distance'] = float(min_distance)
-
-        vec_reward = np.array([efficiency_reward, safety_reward, stability_reward], dtype=np.float32)
-        terminated = self.crashed
-        truncated = self.current_step >= self.episode_length
-        return obs, vec_reward, terminated, truncated, info
-    
     def _destroy_actors(self):
         """Destroy all actors to clean up the environment."""
         actors = []
@@ -588,19 +432,15 @@ class MOCarlaWrapper:
             if actor.is_alive:
                 actor.destroy()
         
-        # Tick/wait to ensure cleanup callbacks flush.
-        if self._owns_world_settings:
-            self.world.tick()
-        else:
-            self.world.wait_for_tick(2.0)
+        # Tick to ensure cleanup callbacks flush.
+        self.world.tick()
 
     def close(self):
         """Clean up the environment."""
         self._destroy_actors()
         
-        # Restore previous world settings only if this wrapper changed them.
-        if self._owns_world_settings:
-            self.world.apply_settings(self._prev_settings)
+        # Restore previous world settings.
+        self.world.apply_settings(self._prev_settings)
 
     def __del__(self):
         try:
@@ -611,90 +451,41 @@ class MOCarlaWrapper:
 if __name__ == "__main__":
     # Test the CARLA wrapper
     print("Initializing CARLA Multi-Objective Environment...")
-    print("\nChoose control mode:")
-    print("  1) Random action smoke test")
-    print("  2) Monitor external driving (manual_control.py) with auto-spawn fallback")
-    mode = input("Enter 1 or 2 [default 2]: ").strip() or "2"
-    if mode not in ("1", "2"):
-        print(f"Unknown mode '{mode}', switching to mode 2.")
-        mode = "2"
+    env = MOCarlaWrapper(town='Town04', episode_length=400)
+    print(f"SSF Threshold (g): {env.SSF_LIMIT_G:.2f} m/s^2")
+    print("\nResetting environment...")
 
-    if mode == "2":
-        # In monitor mode, do NOT reload map and do NOT force sync.
-        env = MOCarlaWrapper(
-            town='Town04',
-            episode_length=20,
-            reload_world=False,
-            sync_mode=False
-        )
-        print(f"SSF Threshold (g): {env.SSF_LIMIT_G:.2f} m/s^2")
-        print("\nAttaching to external ego vehicle (or spawning one if missing)...")
-        obs, info = env.attach_to_existing_vehicle(
-            role_names=('hero', 'ego'),
-            wait_seconds=5.0,
-            poll_interval=0.5,
-            allow_any_vehicle=False,
-            spawn_if_missing=True,
-            enable_autopilot_if_spawned=False
-        )
-        kinematics_obs, lidar_obs = obs
-        print("Observation shapes:")
-        print(f"  Kinematics: {kinematics_obs.shape}")
-        print(f"  LIDAR: {lidar_obs.shape}")
-        print("\nMonitoring live driving. Press Ctrl+C to stop.")
+    obs, info = env.reset()
+    kinematics_obs, lidar_obs = obs
 
-        i = 0
-        try:
-            while True:
-                i += 1
-                obs, vec_reward, terminated, truncated, info = env.observe_step()
-                print(
-                    f"Step {i:04d} | Reward={vec_reward} | "
-                    f"Speed={info['speed']:.2f} m/s | "
-                    f"LatAcc={info['lateral_accel']:.2f} m/s^2 | "
-                    f"Risk={info['rollover_risk']:.2f} | "
-                    f"MinLiDAR={info['min_lidar_distance']:.2f} m"
-                )
-                if terminated or truncated:
-                    break
-        except KeyboardInterrupt:
-            pass
-    else:
-        env = MOCarlaWrapper(town='Town04', episode_length=400)
-        print(f"SSF Threshold (g): {env.SSF_LIMIT_G:.2f} m/s^2")
-        print("\nResetting environment...")
+    print("Observation shapes:")
+    print(f"  Kinematics: {kinematics_obs.shape}")
+    print(f"  LIDAR: {lidar_obs.shape}")
 
-        obs, info = env.reset()
-        kinematics_obs, lidar_obs = obs
+    print("\nRunning random-action test steps...")
+    for i in range(20):
+        # Sample throttle in [0, 1] so the car actually moves in smoke tests.
+        action = np.array([
+            np.random.uniform(0.2, 0.8),
+            np.random.uniform(-0.35, 0.35)
+        ], dtype=np.float32)
 
-        print(f"Observation shapes:")
-        print(f"  Kinematics: {kinematics_obs.shape}")
-        print(f"  LIDAR: {lidar_obs.shape}")
+        obs, vec_reward, terminated, truncated, info = env.step(action)
 
-        print("\nRunning random-action test steps...")
-        for i in range(20):
-            # Sample throttle in [0, 1] so the car actually moves in smoke tests.
-            action = np.array([
-                np.random.uniform(0.2, 0.8),
-                np.random.uniform(-0.35, 0.35)
-            ], dtype=np.float32)
+        print(f"\nStep {i+1}:")
+        print(f"  Action: throttle={action[0]:.2f}, steer={action[1]:.2f}")
+        print(f"  Reward: {vec_reward}")
+        print(f"  Speed: {info['speed']:.2f} m/s")
+        print(f"  Lat Accel: {info['lateral_accel']:.2f} m/s^2")
+        print(f"  Rollover Risk: {info['rollover_risk']:.2f}")
+        print(f"  Min LIDAR Dist: {info['min_lidar_distance']:.2f} m")
 
-            obs, vec_reward, terminated, truncated, info = env.step(action)
-
-            print(f"\nStep {i+1}:")
-            print(f"  Action: throttle={action[0]:.2f}, steer={action[1]:.2f}")
-            print(f"  Reward: {vec_reward}")
-            print(f"  Speed: {info['speed']:.2f} m/s")
-            print(f"  Lat Accel: {info['lateral_accel']:.2f} m/s^2")
-            print(f"  Rollover Risk: {info['rollover_risk']:.2f}")
-            print(f"  Min LIDAR Dist: {info['min_lidar_distance']:.2f} m")
-
-            if terminated:
-                print("\n! Episode terminated (crashed)")
-                break
-            if truncated:
-                print("\n! Episode truncated (max steps)")
-                break
+        if terminated:
+            print("\n! Episode terminated (crashed)")
+            break
+        if truncated:
+            print("\n! Episode truncated (max steps)")
+            break
     
     print("\nClosing environment...")
     env.close()
