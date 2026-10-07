@@ -1,3 +1,23 @@
+## My Contribution — Hao Wang
+
+2-person capstone (with Eden Brunner). I led the highway-env / MORL work.
+
+- **Environment** — built a custom `mo-gymnasium` wrapper that converts
+  highway-env from a scalar-reward simulator into a three-objective environment
+  (efficiency, collision safety, cargo stability); designed normalized rewards,
+  observations, continuous acceleration/steering controls, and the traffic
+  scenario (3 lanes, 20 surrounding vehicles, 15–30 m/s).
+- **Training** — integrated and trained a Pareto Conditioned Network using
+  `morl-baselines`; resolved dependency and reward-space errors and trained on a
+  local NVIDIA GPU; produced rollout visualizations comparing aggressive,
+  safety-focused, and stability-focused policies.
+- **CARLA** — contributed to simulation debugging: fixed zero-speed behavior and
+  added keyboard control with live reward monitoring.
+
+*Note: PCN and the MEow codebase are existing research code — I integrated them,
+I did not build them from scratch. Full CARLA training was not completed; a
+recorded demo was used instead due to GPU constraints.*
+
 Proposal: 2/13/2026
 Eden Brunner, Hao Wang
 Autonomous Driving for Food Delivery
